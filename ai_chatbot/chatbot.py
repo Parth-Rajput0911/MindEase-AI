@@ -9,10 +9,10 @@ load_dotenv()
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 def get_wellness_response(user_message: str) -> str:
-    """Sends user message to Groq Llama-3.1-8b and returns the AI reply."""
+    """Sends user message to Groq and returns the AI reply."""
     try:
         completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-20b",
             messages=[
                 {
                     "role": "system",
