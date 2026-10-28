@@ -5,15 +5,19 @@ stress episodes, interventions, and notification events backed by SQLAlchemy 2.x
 """
 
 from contextlib import asynccontextmanager
+import os
 from typing import List, Optional
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from groq import Groq
 
-from Backend.config import settings
-from Backend.database import create_tables_direct, get_db, init_db
-from Backend.repositories import (
+from .config import settings
+from .database import create_tables_direct, get_db, init_db
+from .repositories import (
     BaselineRepository,
     EpisodeRepository,
     InterventionRepository,
@@ -21,7 +25,7 @@ from Backend.repositories import (
     SensorReadingRepository,
     UserRepository,
 )
-from Backend.schemas import (
+from .schemas import (
     BaselineCreate,
     BaselineRead,
     EpisodeCreate,
@@ -38,16 +42,50 @@ from Backend.schemas import (
     UserRead,
 )
 
+# Load environment variables from .env
+load_dotenv()
+
+# Initialize Groq Client
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+
+class ChatRequest(BaseModel):
+    message: str
+
+def get_wellness_response(message: str) -> str:
+    """Calls Groq model to generate an empathetic mental wellness response."""
+    prompt = (message or "").strip()
+    if not prompt:
+        return "I’m here to help. Please share how you’re feeling today."
+
+    try:
+        completion = groq_client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are MindEase AI, a gentle, empathetic, and supportive mental wellness companion. "
+                        "Provide comforting, human-like, and encouraging advice for managing stress and practicing mindfulness. "
+                        "Do not issue medical diagnoses or clinical health advice."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.7,
+            max_tokens=500,
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        return f"I'm listening and here for you. (Note: AI model connectivity encountered an issue: {str(e)})"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     On startup: register models on Base.metadata so SQLAlchemy is aware
-    of all relationships.  Table creation is left to Alembic migrations.
-    `create_tables_direct()` is intentionally NOT called here to avoid
-    creating tables that bypass migration version tracking.
+    of all relationships. Table creation is left to Alembic migrations.
     """
-    init_db()  # registers models only; does NOT call create_all()
+    init_db()
     yield
 
 
@@ -86,22 +124,23 @@ def health_check(db: Session = Depends(get_db)):
 
 
 # ============================================================================
-# User Endpoints
+# AI Chat Companion Endpoints
 # ============================================================================
 @app.post(
-    f"{settings.API_V1_PREFIX}/users",
-    response_model=UserRead,
-    status_code=status.HTTP_201_CREATED,
-    tags=["Users"],
+    f"{settings.API_V1_PREFIX}/chat",
+    tags=["AI Chat Companion"],
 )
-def create_user(user_in: UserCreate, db: Session = Depends(get_db)):
-    if UserRepository.get_by_email(db, user_in.email):
-        raise HTTPException(status_code=400, detail="Email already registered")
-    if UserRepository.get_by_username(db, user_in.username):
-        raise HTTPException(status_code=400, detail="Username already taken")
-    return UserRepository.create(db, user_in)
+def chat_with_mindease(req: ChatRequest):
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+    
+    reply = get_wellness_response(req.message)
+    return {"reply": reply}
 
 
+# ============================================================================
+# User Endpoints
+# ============================================================================
 @app.get(
     f"{settings.API_V1_PREFIX}/users/{{user_id}}",
     response_model=UserRead,
@@ -255,7 +294,7 @@ def record_notification(
     notification_in: NotificationEventCreate, db: Session = Depends(get_db)
 ):
     """
-    Record a notification event. Always initialized with is_simulated=True (Req #12).
+    Record a notification event. Always initialized with is_simulated=True.
     """
     return NotificationEventRepository.create(db, notification_in)
 
@@ -286,7 +325,7 @@ def confirm_notification_delivery(
     db: Session = Depends(get_db),
 ):
     """
-    Mark a notification as real and confirmed delivered by external provider (Req #12).
+    Mark a notification as real and confirmed delivered by external provider.
     """
     updated = NotificationEventRepository.confirm_delivery(
         db, notification_id, confirmation
