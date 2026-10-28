@@ -10,18 +10,18 @@ from typing import List, Optional
 from dotenv import load_dotenv
 # pyrefly: ignore[missing-import]
 from fastapi import Depends, FastAPI, HTTPException, Query, status
-# pyrefly: ignore[missing-import]
 from fastapi.middleware.cors import CORSMiddleware
-# pyrefly: ignore[missing-import]
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
-# pyrefly: ignore[missing-import]
 from sqlalchemy.orm import Session
-# pyrefly: ignore[missing-import]
 from pydantic import BaseModel
-# pyrefly: ignore[missing-import]
-from groq import Groq
+try:
+    from groq import Groq
+except ImportError:  # Keep the API usable when the optional AI dependency is not installed.
+    Groq = None  # type: ignore[assignment,misc]
 
-from .config import settings
+from .config import BASE_DIR, settings
 from .database import create_tables_direct, get_db, init_db
 from .repositories import (
     BaselineRepository,
@@ -47,12 +47,21 @@ from .schemas import (
     UserCreate,
     UserRead,
 )
+from emergency.emergency import (
+    EmergencyContact,
+    EmergencyDispatchPayload,
+    EmergencyDispatchResult,
+    EmergencyHotline,
+    EmergencyService,
+)
 
 # Load environment variables from .env
 load_dotenv()
 
-# Initialize Groq Client
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+# Create the optional AI client only when the SDK and an API key are available.
+# This keeps the rest of the API (telemetry, episodes, tests) usable without AI credentials.
+_groq_api_key = os.getenv("GROQ_API_KEY")
+groq_client = Groq(api_key=_groq_api_key) if Groq is not None and _groq_api_key else None
 
 
 class ChatRequest(BaseModel):
@@ -63,6 +72,13 @@ def get_wellness_response(message: str) -> str:
     prompt = (message or "").strip()
     if not prompt:
         return "I’m here to help. Please share how you’re feeling today."
+
+    if groq_client is None:
+        return (
+            "I'm here with you. Try taking a comfortable, slow breath and notice "
+            "five things you can see around you. AI responses are unavailable "
+            "until the Groq SDK and GROQ_API_KEY are configured."
+        )
 
     try:
         completion = groq_client.chat.completions.create(
@@ -82,8 +98,12 @@ def get_wellness_response(message: str) -> str:
             max_tokens=500,
         )
         return completion.choices[0].message.content
-    except Exception as e:
-        return f"I'm listening and here for you. (Note: AI model connectivity encountered an issue: {str(e)})"
+    except Exception:
+        # Do not expose provider errors, request details, or configuration in user-facing text.
+        return (
+            "I'm listening. Try grounding yourself by noticing your feet on the floor "
+            "and taking a comfortable, unforced breath. The AI service is temporarily unavailable."
+        )
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -103,12 +123,19 @@ app = FastAPI(
 )
 
 # CORS middleware for frontend integration
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -129,6 +156,16 @@ def health_check(db: Session = Depends(get_db)):
     }
 
 
+# Frontend static files mounting and root redirect
+_frontend_dir = BASE_DIR.parent / "frontend"
+if _frontend_dir.exists():
+    app.mount("/app", StaticFiles(directory=str(_frontend_dir), html=True), name="frontend")
+
+    @app.get("/", include_in_schema=False)
+    def root():
+        return RedirectResponse(url="/app/")
+
+
 # ============================================================================
 # AI Chat Companion Endpoints
 # ============================================================================
@@ -147,6 +184,21 @@ def chat_with_mindease(req: ChatRequest):
 # ============================================================================
 # User Endpoints
 # ============================================================================
+@app.post(
+    f"{settings.API_V1_PREFIX}/users",
+    response_model=UserRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Users"],
+)
+def create_user(user_in: UserCreate, db: Session = Depends(get_db)):
+    """Create a user profile for the prototype. Authentication is not implemented yet."""
+    if UserRepository.get_by_email(db, str(user_in.email)):
+        raise HTTPException(status_code=409, detail="Email is already registered")
+    if UserRepository.get_by_username(db, user_in.username):
+        raise HTTPException(status_code=409, detail="Username is already registered")
+    return UserRepository.create(db, user_in)
+
+
 @app.get(
     f"{settings.API_V1_PREFIX}/users/{{user_id}}",
     response_model=UserRead,
@@ -339,3 +391,57 @@ def confirm_notification_delivery(
     if not updated:
         raise HTTPException(status_code=404, detail="Notification event not found")
     return updated
+
+
+# ============================================================================
+# Emergency Dispatch & Crisis Support Endpoints
+# ============================================================================
+@app.post(
+    f"{settings.API_V1_PREFIX}/emergency/dispatch",
+    response_model=EmergencyDispatchResult,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Emergency Services"],
+)
+def trigger_emergency_dispatch(
+    payload: EmergencyDispatchPayload,
+    db: Session = Depends(get_db),
+):
+    """
+    Trigger an emergency alert or acute panic assistance protocol.
+    Notifies trusted contacts (simulated by default), creates audit
+    records in database, and returns crisis hotlines and immediate coping steps.
+    """
+    try:
+        return EmergencyService.dispatch(db, payload)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Emergency dispatch failure: {str(exc)}")
+
+
+@app.get(
+    f"{settings.API_V1_PREFIX}/emergency/hotlines",
+    response_model=List[EmergencyHotline],
+    tags=["Emergency Services"],
+)
+def get_emergency_hotlines(
+    region: Optional[str] = Query(None, description="Optional region filter (e.g. US, UK, EU, IN)"),
+):
+    """
+    Retrieve verified 24/7 mental health crisis lines and emergency dispatch numbers.
+    """
+    return EmergencyService.get_hotlines(region=region)
+
+
+@app.get(
+    f"{settings.API_V1_PREFIX}/emergency/history/{{user_id}}",
+    response_model=List[NotificationEventRead],
+    tags=["Emergency Services"],
+)
+def get_user_emergency_history(
+    user_id: str,
+    limit: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """
+    Retrieve recorded emergency alerts and panic dispatch events for a user.
+    """
+    return EmergencyService.get_user_emergency_history(db, user_id=user_id, limit=limit)

@@ -127,12 +127,36 @@ MindEase-AI/
 │       ├── test_repositories.py
 │       ├── test_seed.py
 │       ├── test_sensor_readings.py
-│       └── test_utc_timestamps.py
-├── frontend/                     # Web interface
-├── ai_chatbot/                   # Chatbot service
-├── emergency/                    # Emergency service module
-└── mood-tracker/                 # Mood tracking module
+│       ├── test_utc_timestamps.py
+│       └── test_emergency.py         # Emergency dispatch & hotlines test suite
+├── frontend/                         # Responsive web interface & simulator
+├── ai_chatbot/                       # Chatbot service
+├── emergency/                        # Emergency Service Module
+│   ├── __init__.py                   # Emergency package exports
+│   └── emergency.py                  # Dispatch engine, contact alerting & 24/7 hotlines
+└── mood-tracker/                     # Mood tracking module
 ```
+
+---
+
+## Emergency Service Architecture
+
+The Emergency Service (`emergency/emergency.py`) handles crisis escalations, acute panic episodes, and caregiver alerts:
+
+1. **Automated & Manual Dispatch (`POST /api/v1/emergency/dispatch`)**:
+   - Creates an acute episode and records an `emergency_call` intervention.
+   - Gathers user emergency contacts + optional custom contacts.
+   - Generates simulated multi-channel notifications (`sms`, `in_app`, `email`) obeying Requirement 12.
+   - Returns immediate grounding instructions (5-4-3-2-1 reset, 4-7-8 breathing) and hotlines.
+
+2. **24/7 Crisis Helpline Directory (`GET /api/v1/emergency/hotlines`)**:
+   - US/Canada: 988 Suicide & Crisis Lifeline, Crisis Text Line (741741), 911
+   - UK: NHS 111, Samaritans (116 123), 999
+   - EU & India: 112, Tele-MANAS (14416)
+   - Supports regional filtering via `?region=US`, `?region=EU`, etc.
+
+3. **Emergency History & Auditing (`GET /api/v1/emergency/history/{user_id}`)**:
+   - Secure query of past panic alerts and simulated dispatches for retrospective care review.
 
 ---
 

@@ -17,7 +17,7 @@ load_dotenv(BASE_DIR / ".env")
 class Settings:
     APP_NAME: str = os.getenv("APP_NAME", "MindEase-AI")
     APP_ENV: str = os.getenv("APP_ENV", "development")
-    DEBUG: bool = os.getenv("DEBUG", "True").lower() in ("true", "1", "yes")
+    DEBUG: bool = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
 
     # Database configuration - defaults to SQLite in the Backend directory
     DATABASE_URL: str = os.getenv(
