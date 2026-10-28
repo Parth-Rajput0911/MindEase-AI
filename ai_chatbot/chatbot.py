@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+# pyrefly: ignore[import, missing-import]
 from groq import Groq
 
 # Load environment variables
